@@ -10,9 +10,11 @@ from click import prompt
 from click import confirm
 
 from samcli.commands._utils.options import _space_separated_list_func_type
-from samcli.commands._utils.template import get_template_parameters
+from samcli.commands._utils.template import get_template_parameters, get_template_data
 from samcli.commands.deploy.exceptions import GuidedDeployFailedError
 from samcli.commands.deploy.guided_config import GuidedConfig
+from samcli.commands.deploy.auth_utils import auth_per_resource
+from samcli.commands.deploy.utils import sanitize_parameter_overrides, print_deploy_args
 from samcli.lib.bootstrap.bootstrap import manage_stack
 from samcli.lib.utils.colors import Colored
 
@@ -67,7 +69,7 @@ class GuidedContext:
     def guided_prompts(self, parameter_override_keys):
         default_stack_name = self.stack_name or "sam-app"
         default_region = self.region or "us-east-1"
-        default_capabilities = ("CAPABILITY_IAM",)
+        default_capabilities = self.capabilities[0] or ("CAPABILITY_IAM",)
         input_capabilities = None
 
         click.echo(
@@ -98,6 +100,8 @@ class GuidedContext:
                 type=FuncParamType(func=_space_separated_list_func_type),
             )
 
+        self.prompt_authorization(sanitize_parameter_overrides(input_parameter_overrides))
+
         save_to_config = confirm(f"\t{self.start_bold}Save arguments to samconfig.toml{self.end_bold}", default=True)
 
         s3_bucket = manage_stack(profile=self.profile, region=region)
@@ -113,6 +117,18 @@ class GuidedContext:
         self._parameter_overrides = input_parameter_overrides if input_parameter_overrides else self.parameter_overrides
         self.save_to_config = save_to_config
         self.confirm_changeset = confirm_changeset
+
+    def prompt_authorization(self, parameter_overrides):
+        auth_required_per_resource = auth_per_resource(parameter_overrides, get_template_data(self.template_file))
+
+        for resource, authorization_required in auth_required_per_resource:
+            if not authorization_required:
+                auth_confirm = confirm(
+                    f"\t{self.start_bold}{resource} may not have authorization defined, Is this okay?{self.end_bold}",
+                    default=False,
+                )
+                if not auth_confirm:
+                    raise GuidedDeployFailedError(msg="Security Constraints Not Satisfied!")
 
     def prompt_parameters(self, parameter_override_keys, start_bold, end_bold):
         _prompted_param_overrides = {}
@@ -148,6 +164,15 @@ class GuidedContext:
         guided_config.read_config_showcase()
 
         self.guided_prompts(_parameter_override_keys)
+
+        print_deploy_args(
+            stack_name=self.guided_stack_name,
+            s3_bucket=self.guided_s3_bucket,
+            region=self.guided_region,
+            capabilities=self._capabilities,
+            parameter_overrides=self._parameter_overrides,
+            confirm_changeset=self.confirm_changeset,
+        )
 
         if self.save_to_config:
             guided_config.save_config(

@@ -21,7 +21,10 @@ import os
 import boto3
 import click
 
+from samcli.commands._utils.template import get_template_data
 from samcli.commands.deploy import exceptions as deploy_exceptions
+from samcli.commands.deploy.auth_utils import auth_per_resource
+from samcli.commands.deploy.utils import sanitize_parameter_overrides, print_deploy_args
 from samcli.lib.deploy.deployer import Deployer
 from samcli.lib.package.s3_uploader import S3Uploader
 from samcli.lib.utils.botoconfig import get_boto_config_with_user_agent
@@ -115,7 +118,14 @@ class DeployContext:
         self.deployer = Deployer(cloudformation_client)
 
         region = s3_client._client_config.region_name if s3_client else self.region  # pylint: disable=W0212
-
+        print_deploy_args(
+            self.stack_name,
+            self.s3_bucket,
+            region,
+            self.capabilities,
+            self.parameter_overrides,
+            self.confirm_changeset,
+        )
         return self.deploy(
             self.stack_name,
             template_str,
@@ -146,6 +156,15 @@ class DeployContext:
         fail_on_empty_changeset=True,
         confirm_changeset=False,
     ):
+
+        auth_required_per_resource = auth_per_resource(
+            sanitize_parameter_overrides(self.parameter_overrides), get_template_data(self.template_file)
+        )
+
+        for resource, authorization_required in auth_required_per_resource:
+            if not authorization_required:
+                click.secho(f"{resource} may not have authorization defined.", fg="yellow")
+
         try:
             result, changeset_type = self.deployer.create_and_wait_for_changeset(
                 stack_name=stack_name,

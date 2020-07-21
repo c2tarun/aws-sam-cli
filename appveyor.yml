@@ -19,7 +19,7 @@ environment:
       APPVEYOR_CONSOLE_DISABLE_PTY: true
 
     - PYTHON_HOME: "C:\\Python37-x64"
-      PYTHON_VERSION: '3.7.5'
+      PYTHON_VERSION: '3.7.7'
       PYTHON_ARCH: '64'
       RUN_SMOKE: 1
       NOSE_PARAMETERIZED_NO_WARN: 1
@@ -54,6 +54,7 @@ for:
       - "echo %PYTHON_HOME%"
       - "echo %PATH%"
       - "python -m pip install --upgrade setuptools wheel virtualenv"
+      - "docker info"
 
       # Install AWS CLI Globally outside of a venv.
       - "pip install awscli"
@@ -90,6 +91,7 @@ for:
       - sh: "PATH=$JAVA_HOME/bin:$PATH"
       - sh: "source ${HOME}/venv${PYTHON_VERSION}/bin/activate"
       - sh: "rvm use 2.5"
+      - sh: "docker info"
 
       # Install latest gradle 
       - sh: "sudo apt-get -y remove gradle"
@@ -137,7 +139,7 @@ for:
       # Runs only in Linux
       - sh: "pytest -vv tests/integration"
       - sh: "pytest -vv tests/regression"
-      - sh: "/tmp/black --check setup.py tests samcli scripts"
+      - sh: "/tmp/black --check setup.py tests samcli"
 
       # Set JAVA_HOME to java11
       - sh: "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64"

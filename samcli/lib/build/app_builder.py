@@ -14,9 +14,11 @@ from aws_lambda_builders.exceptions import LambdaBuilderError
 from aws_lambda_builders import RPC_PROTOCOL_VERSION as lambda_builders_protocol_version
 
 import samcli.lib.utils.osutils as osutils
+from samcli.lib.utils.colors import Colored
+from samcli.commands.build.exceptions import MissingBuildMethodException
+from samcli.lib.providers.sam_base_provider import SamBaseProvider
 from samcli.local.docker.lambda_build_container import LambdaBuildContainer
-from .workflow_config import get_workflow_config, supports_build_in_container
-
+from .workflow_config import get_workflow_config, get_layer_subfolder, supports_build_in_container
 
 LOG = logging.getLogger(__name__)
 
@@ -34,6 +36,13 @@ class ContainerBuildNotSupported(Exception):
 
 
 class BuildError(Exception):
+
+    def __init__(self, wrapped_from, msg):
+        self.wrapped_from = wrapped_from
+        Exception.__init__(self, msg)
+
+
+class BuildInsideContainerError(Exception):
     pass
 
 
@@ -45,7 +54,7 @@ class ApplicationBuilder:
     """
 
     def __init__(self,
-                 functions_to_build,
+                 resources_to_build,
                  build_dir,
                  base_dir,
                  manifest_path_override=None,
@@ -75,7 +84,7 @@ class ApplicationBuilder:
         mode : str
             Optional, name of the build mode to use ex: 'debug'
         """
-        self._functions_to_build = functions_to_build
+        self._resources_to_build = resources_to_build
         self._build_dir = build_dir
         self._base_dir = base_dir
         self._manifest_path_override = manifest_path_override
@@ -83,6 +92,9 @@ class ApplicationBuilder:
         self._container_manager = container_manager
         self._parallel = parallel
         self._mode = mode
+
+        self._deprecated_runtimes = {"nodejs4.3", "nodejs6.10", "nodejs8.10", "dotnetcore2.0"}
+        self._colored = Colored()
 
     def build(self):
         """
@@ -96,13 +108,22 @@ class ApplicationBuilder:
 
         result = {}
 
-        for lambda_function in self._functions_to_build:
-
-            LOG.info("Building resource '%s'", lambda_function.name)
-            result[lambda_function.name] = self._build_function(lambda_function.name,
-                                                                lambda_function.codeuri,
-                                                                lambda_function.runtime,
-                                                                lambda_function.handler)
+        for function in self._resources_to_build.functions:
+            LOG.info("Building function '%s'", function.name)
+            result[function.name] = self._build_function(function.name,
+                                                         function.codeuri,
+                                                         function.runtime,
+                                                         function.handler,
+                                                         function.metadata)
+        for layer in self._resources_to_build.layers:
+            LOG.info("Building layer '%s'", layer.name)
+            if layer.build_method is None:
+                raise MissingBuildMethodException(
+                    f"Layer {layer.name} cannot be build without BuildMethod. Please provide BuildMethod in Metadata.")
+            result[layer.name] = self._build_layer(layer.name,
+                                                   layer.codeuri,
+                                                   layer.build_method,
+                                                   layer.compatible_runtimes)
 
         return result
 
@@ -141,15 +162,54 @@ class ApplicationBuilder:
 
             resource_type = resource.get("Type")
             properties = resource.setdefault("Properties", {})
-            if resource_type == "AWS::Serverless::Function":
+            if resource_type == SamBaseProvider.SERVERLESS_FUNCTION:
                 properties["CodeUri"] = artifact_relative_path
 
-            if resource_type == "AWS::Lambda::Function":
+            if resource_type == SamBaseProvider.LAMBDA_FUNCTION:
                 properties["Code"] = artifact_relative_path
+
+            if resource_type in [SamBaseProvider.SERVERLESS_LAYER, SamBaseProvider.LAMBDA_LAYER]:
+                properties["ContentUri"] = artifact_relative_path
 
         return template_dict
 
-    def _build_function(self, function_name, codeuri, runtime, handler):
+    def _build_layer(self, layer_name, codeuri, specified_workflow, compatible_runtimes):
+        # Create the arguments to pass to the builder
+        # Code is always relative to the given base directory.
+        code_dir = str(pathlib.Path(self._base_dir, codeuri).resolve())
+
+        config = get_workflow_config(None, code_dir, self._base_dir, specified_workflow)
+        subfolder = get_layer_subfolder(specified_workflow)
+
+        # artifacts directory will be created by the builder
+        artifacts_dir = str(pathlib.Path(self._build_dir, layer_name, subfolder))
+
+        with osutils.mkdir_temp() as scratch_dir:
+            manifest_path = self._manifest_path_override or os.path.join(code_dir, config.manifest_name)
+
+            # By default prefer to build in-process for speed
+            build_runtime = specified_workflow
+            build_method = self._build_function_in_process
+            if self._container_manager:
+                build_method = self._build_function_on_container
+                if config.language == "provided":
+                    LOG.warning(
+                        "For container layer build, first compatible runtime is chosen as build target for container.")
+                    # Only set to this value if specified workflow is makefile which will result in config language as provided
+                    build_runtime = compatible_runtimes[0]
+            options = ApplicationBuilder._get_build_options(layer_name, config.language, None)
+
+            build_method(config,
+                         code_dir,
+                         artifacts_dir,
+                         scratch_dir,
+                         manifest_path,
+                         build_runtime,
+                         options)
+            # Not including subfolder in return so that we copy subfolder, instead of copying artifacts inside it.
+            return str(pathlib.Path(self._build_dir, layer_name))
+
+    def _build_function(self, function_name, codeuri, runtime, handler, metadata=None):
         """
         Given the function information, this method will build the Lambda function. Depending on the configuration
         it will either build the function in process or by spinning up a Docker container.
@@ -165,17 +225,29 @@ class ApplicationBuilder:
         runtime : str
             AWS Lambda function runtime
 
+        metadata : dict
+            AWS Lambda function metadata
+
         Returns
         -------
         str
             Path to the location where built artifacts are available
         """
 
+        if runtime in self._deprecated_runtimes:
+            message = f"WARNING: {runtime} is no longer supported by AWS Lambda, please update to a newer supported runtime. SAM CLI " \
+                      f"will drop support for all deprecated runtimes {self._deprecated_runtimes} on May 1st. " \
+                      f"See issue: https://github.com/awslabs/aws-sam-cli/issues/1934 for more details."
+            LOG.warning(self._colored.yellow(message))
+
         # Create the arguments to pass to the builder
         # Code is always relative to the given base directory.
         code_dir = str(pathlib.Path(self._base_dir, codeuri).resolve())
 
-        config = get_workflow_config(runtime, code_dir, self._base_dir)
+        # Determine if there was a build workflow that was specified directly in the template.
+        specified_build_workflow = metadata.get("BuildMethod", None) if metadata else None
+
+        config = get_workflow_config(runtime, code_dir, self._base_dir, specified_workflow=specified_build_workflow)
 
         # artifacts directory will be created by the builder
         artifacts_dir = str(pathlib.Path(self._build_dir, function_name))
@@ -188,7 +260,7 @@ class ApplicationBuilder:
             if self._container_manager:
                 build_method = self._build_function_on_container
 
-            options = ApplicationBuilder._get_build_options(config.language, handler)
+            options = ApplicationBuilder._get_build_options(function_name, config.language, handler)
 
             return build_method(config,
                                 code_dir,
@@ -199,12 +271,14 @@ class ApplicationBuilder:
                                 options)
 
     @staticmethod
-    def _get_build_options(language, handler):
+    def _get_build_options(function_name, language, handler):
         """
         Parameters
         ----------
+        function_name str
+            currrent function resource name
         language str
-            Language of the runtime
+            language of the runtime
         handler str
             Handler value of the Lambda Function Resource
         Returns
@@ -212,7 +286,12 @@ class ApplicationBuilder:
         dict
             Dictionary that represents the options to pass to the builder workflow or None if options are not needed
         """
-        return {'artifact_executable_name': handler} if language == 'go' else None
+
+        _build_options = {
+            'go': {'artifact_executable_name': handler},
+            'provided': {'build_logical_id': function_name}
+        }
+        return _build_options.get(language, None)
 
     def _build_function_in_process(self,
                                    config,
@@ -237,7 +316,7 @@ class ApplicationBuilder:
                           mode=self._mode,
                           options=options)
         except LambdaBuilderError as ex:
-            raise BuildError(str(ex))
+            raise BuildError(wrapped_from=ex.__class__.__name__, msg=str(ex))
 
         return artifacts_dir
 
@@ -251,7 +330,7 @@ class ApplicationBuilder:
                                      options):
 
         if not self._container_manager.is_docker_reachable:
-            raise BuildError("Docker is unreachable. Docker needs to be running to build inside a container.")
+            raise BuildInsideContainerError("Docker is unreachable. Docker needs to be running to build inside a container.")
 
         container_build_supported, reason = supports_build_in_container(config)
         if not container_build_supported:
@@ -324,7 +403,7 @@ class ApplicationBuilder:
 
             if 400 <= err_code < 500:
                 # Like HTTP 4xx - customer error
-                raise BuildError(msg)
+                raise BuildInsideContainerError(msg)
 
             if err_code == 505:
                 # Like HTTP 505 error code: Version of the protocol is not supported

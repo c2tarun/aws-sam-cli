@@ -1,6 +1,7 @@
 import time
 import os
 import sys
+import subprocess
 
 print ("Loading function")
 
@@ -14,6 +15,8 @@ def handler(event, context):
 
     return "Hello world"
 
+def intrinsics_handler(event, context):
+    return os.environ.get("ApplicationId")
 
 def sleep_handler(event, context):
     time.sleep(10)
@@ -46,3 +49,10 @@ def echo_event(event, context):
 
 def raise_exception(event, context):
     raise Exception("Lambda is raising an exception")
+
+
+def execute_git(event, context):
+    return_code = subprocess.call(['git', 'init', '/tmp/samtesting'])
+    assert return_code == 0
+
+    return "git init passed"
