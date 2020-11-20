@@ -3,8 +3,7 @@ Represents Lambda runtime containers.
 """
 import logging
 
-from pathlib import Path
-
+from samcli.lib.utils.feature_flag import extensions_preview_enabled
 from samcli.local.docker.lambda_debug_settings import LambdaDebugSettings
 from .container import Container
 from .lambda_image import Runtime
@@ -74,14 +73,16 @@ class LambdaContainer(Container):
         entry, debug_env_vars = LambdaContainer._get_debug_settings(runtime, debug_options)
         additional_options = LambdaContainer._get_additional_options(runtime, debug_options)
         additional_volumes = LambdaContainer._get_additional_volumes(runtime, debug_options)
-        cmd = [handler]
+        cmd = []
+        if not extensions_preview_enabled():
+            cmd = [handler]
 
         if not env_vars:
             env_vars = {}
 
         env_vars = {**env_vars, **debug_env_vars}
 
-        super(LambdaContainer, self).__init__(
+        super().__init__(
             image,
             cmd,
             self._WORKING_DIR,
@@ -98,8 +99,9 @@ class LambdaContainer(Container):
     def _get_exposed_ports(debug_options):
         """
         Return Docker container port binding information. If a debug port tuple is given, then we will ask Docker to
-        bind every given port to same port both inside and outside the container ie. Runtime process is started in debug mode with
-        at given port inside the container and exposed to the host machine at the same port
+        bind every given port to same port both inside and outside the container ie.
+        Runtime process is started in debug mode with at given port inside the container
+        and exposed to the host machine at the same port.
 
         :param DebugContext debug_options: Debugging options for the function (includes debug port, args, and path)
         :return dict: Dictionary containing port binding information. None, if debug_port was not given

@@ -77,15 +77,15 @@ class InitTemplates:
             if template.get("directory") is not None:
                 return os.path.join(self.repo_path, template["directory"])
             raise InvalidInitTemplateError("Invalid template. This should not be possible, please raise an issue.")
-        except StopIteration:
+        except StopIteration as ex:
             msg = "Can't find application template " + app_template + " - check valid values in interactive init."
-            raise InvalidInitTemplateError(msg)
+            raise InvalidInitTemplateError(msg) from ex
 
     def _check_app_template(self, entry, app_template):
         return entry["appTemplate"] == app_template
 
     def init_options(self, runtime, dependency_manager):
-        if self.clone_attempted is False:
+        if self.clone_attempted is False:  # pylint: disable=compare-to-zero
             self._clone_repo()
         if self.repo_path is None:
             return self._init_options_from_bundle(runtime, dependency_manager)
@@ -168,11 +168,14 @@ class InitTemplates:
             shutil.rmtree(dest_path, onerror=rmtree_callback)
             LOG.debug("Copying templates from %s to %s", str(temp_path), str(dest_path))
             shutil.copytree(temp_path, dest_path, ignore=shutil.ignore_patterns("*.git"))
-        except (OSError, shutil.Error):
-            # UNSTABLE STATE - it's difficult to see how this scenario could happen except weird permissions, user will need to debug
+        except (OSError, shutil.Error) as ex:
+            # UNSTABLE STATE
+            # it's difficult to see how this scenario could happen except weird permissions, user will need to debug
             raise AppTemplateUpdateException(
-                "Unstable state when updating app templates. Check that you have permissions to create/delete files in the AWS SAM shared directory or file an issue at https://github.com/awslabs/aws-sam-cli/issues"
-            )
+                "Unstable state when updating app templates. "
+                "Check that you have permissions to create/delete files in the AWS SAM shared directory "
+                "or file an issue at https://github.com/awslabs/aws-sam-cli/issues"
+            ) from ex
 
     def _clone_new_app_templates(self, shared_dir, expected_path):
         with osutils.mkdir_temp(ignore_errors=True) as tempdir:
@@ -213,7 +216,7 @@ class InitTemplates:
     def is_dynamic_schemas_template(self, app_template, runtime, dependency_manager):
         """
         Check if provided template is dynamic template e.g: AWS Schemas template.
-        Currently dynamic templates require different handling e.g: for schema download and merge schema code in sam-app.
+        Currently dynamic templates require different handling e.g: for schema download and merge schema code in sam-app
         :param app_template:
         :param runtime:
         :param dependency_manager:
