@@ -81,6 +81,8 @@ class LambdaRuntime_create(TestCase):
             debug_options=debug_options,
             env_vars=self.env_var_value,
             memory_mb=self.DEFAULT_MEMORY,
+            container_host=None,
+            container_host_interface=None,
         )
         # Run the container and get results
         self.manager_mock.create.assert_called_with(container)
@@ -161,7 +163,7 @@ class LambdaRuntime_run(TestCase):
         create_mock.return_value = container
 
         self.runtime.run(None, self.func_config, debug_context=debug_options)
-        create_mock.assert_called_with(self.func_config, debug_options)
+        create_mock.assert_called_with(self.func_config, debug_options, None, None)
         self.manager_mock.run.assert_called_with(container)
 
     def test_must_skip_run_running_container(self):
@@ -269,6 +271,8 @@ class LambdaRuntime_invoke(TestCase):
             debug_options=debug_options,
             env_vars=self.env_var_value,
             memory_mb=self.DEFAULT_MEMORY,
+            container_host=None,
+            container_host_interface=None,
         )
 
         # Run the container and get results
@@ -510,6 +514,28 @@ class TestLambdaRuntime_get_code_dir(TestCase):
         shutil_mock.rmtree.assert_not_called()
 
 
+class TestLambdaRuntime_unarchived_layer(TestCase):
+    def setUp(self):
+        self.manager_mock = Mock()
+        self.layer_downloader = Mock()
+        self.runtime = LambdaRuntime(self.manager_mock, self.layer_downloader)
+
+    @parameterized.expand([(LayerVersion("arn", "file.zip"),)])
+    @patch("samcli.local.lambdafn.runtime.LambdaRuntime._get_code_dir")
+    def test_unarchived_layer(self, layer, get_code_dir_mock):
+        new_url = get_code_dir_mock.return_value = Mock()
+        result = self.runtime._unarchived_layer(layer)
+        self.assertNotEqual(layer, result)
+        self.assertEqual(new_url, result.codeuri)
+
+    @parameterized.expand([("arn",), (LayerVersion("arn", "folder"),), ({"Name": "hi", "Version": "x.y.z"},)])
+    @patch("samcli.local.lambdafn.runtime.LambdaRuntime._get_code_dir")
+    def test_unarchived_layer_not_local_archive_file(self, layer, get_code_dir_mock):
+        get_code_dir_mock.side_effect = lambda x: x  # directly return the input
+        result = self.runtime._unarchived_layer(layer)
+        self.assertEqual(layer, result)
+
+
 class TestWarmLambdaRuntime_invoke(TestCase):
 
     DEFAULT_MEMORY = 128
@@ -595,6 +621,8 @@ class TestWarmLambdaRuntime_invoke(TestCase):
             debug_options=debug_options,
             env_vars=self.env_var_value,
             memory_mb=self.DEFAULT_MEMORY,
+            container_host=None,
+            container_host_interface=None,
         )
 
         # Run the container and get results
@@ -672,6 +700,8 @@ class TestWarmLambdaRuntime_create(TestCase):
             debug_options=debug_options,
             env_vars=self.env_var_value,
             memory_mb=self.DEFAULT_MEMORY,
+            container_host=None,
+            container_host_interface=None,
         )
 
         self.manager_mock.create.assert_called_with(container)
@@ -737,6 +767,8 @@ class TestWarmLambdaRuntime_create(TestCase):
             debug_options=None,
             env_vars=self.env_var_value,
             memory_mb=self.DEFAULT_MEMORY,
+            container_host=None,
+            container_host_interface=None,
         )
         self.manager_mock.create.assert_called_with(container)
         # validate that the created container got cached
@@ -793,14 +825,14 @@ class TestWarmLambdaRuntime_clean_warm_containers_related_resources(TestCase):
     def test_must_container_stopped_when_its_code_dir_got_changed(self, shutil_mock):
 
         self.runtime.clean_running_containers_and_related_resources()
-        self.assertEquals(
+        self.assertEqual(
             self.runtime._container_manager.stop.call_args_list,
             [
                 call(self.func1_container_mock),
                 call(self.func2_container_mock),
             ],
         )
-        self.assertEquals(
+        self.assertEqual(
             shutil_mock.rmtree.call_args_list,
             [
                 call("path1"),

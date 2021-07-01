@@ -1,3 +1,4 @@
+import base64
 import uuid
 import random
 
@@ -7,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time, sleep
 
 import pytest
+from parameterized import parameterized_class
 
 from samcli.commands.local.cli_common.invoke_context import ContainersInitializationMode
 from samcli.local.apigw.local_apigw_service import Route
@@ -120,12 +122,17 @@ class TestServiceErrorResponses(StartApiIntegBaseClass):
         pass
 
 
+@parameterized_class(
+    ("template_path",),
+    [
+        ("/testdata/start_api/template.yaml",),
+        ("/testdata/start_api/nested-templates/template-parent.yaml",),
+    ],
+)
 class TestService(StartApiIntegBaseClass):
     """
     Testing general requirements around the Service that powers `sam local start-api`
     """
-
-    template_path = "/testdata/start_api/template.yaml"
 
     def setUp(self):
         self.url = "http://127.0.0.1:{}".format(self.port)
@@ -229,12 +236,17 @@ class TestService(StartApiIntegBaseClass):
         self.assertEqual(response_data.get("body"), data)
 
 
+@parameterized_class(
+    ("template_path",),
+    [
+        ("/testdata/start_api/template-http-api.yaml",),
+        ("/testdata/start_api/nested-templates/template-http-api-parent.yaml",),
+    ],
+)
 class TestServiceWithHttpApi(StartApiIntegBaseClass):
     """
     Testing general requirements around the Service that powers `sam local start-api`
     """
-
-    template_path = "/testdata/start_api/template-http-api.yaml"
 
     def setUp(self):
         self.url = "http://127.0.0.1:{}".format(self.port)
@@ -371,14 +383,14 @@ class TestServiceWithHttpApi(StartApiIntegBaseClass):
 
     @pytest.mark.flaky(reruns=3)
     @pytest.mark.timeout(timeout=600, method="thread")
-    def test_invalid_v2_lambda_response(self):
+    def test_v2_lambda_response_skip_unexpected_fields(self):
         """
         Patch Request to a path that was defined as ANY in SAM through AWS::Serverless::Function Events
         """
         response = requests.get(self.url + "/invalidv2response", timeout=300)
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json(), {"message": "Internal server error"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"hello": "world"})
 
     @pytest.mark.flaky(reruns=3)
     @pytest.mark.timeout(timeout=600, method="thread")
@@ -522,6 +534,48 @@ class TestStartApiWithSwaggerApis(StartApiIntegBaseClass):
         expected = self.get_binary_data(self.binary_data_file)
 
         response = requests.get(self.url + "/base64response", timeout=300)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Content-Type"), "image/gif")
+        self.assertEqual(response.content, expected)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_non_decoded_binary_response(self):
+        """
+        Binary data is returned correctly
+        """
+        expected = base64.b64encode(self.get_binary_data(self.binary_data_file))
+
+        response = requests.get(self.url + "/nondecodedbase64response", timeout=300)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Content-Type"), "image/gif")
+        self.assertEqual(response.content, expected)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_decoded_binary_response_base64encoded_field(self):
+        """
+        Binary data is returned correctly
+        """
+        expected = self.get_binary_data(self.binary_data_file)
+
+        response = requests.get(self.url + "/decodedbase64responsebas64encoded", timeout=300)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Content-Type"), "image/gif")
+        self.assertEqual(response.content, expected)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_decoded_binary_response_base64encoded_field_is_priority(self):
+        """
+        Binary data is returned correctly
+        """
+        expected = base64.b64encode(self.get_binary_data(self.binary_data_file))
+
+        response = requests.get(self.url + "/decodedbase64responsebas64encodedpriority", timeout=300)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Content-Type"), "image/gif")
@@ -1534,9 +1588,14 @@ class TestCFNTemplateQuickCreatedHttpApiWithDefaultRoute(StartApiIntegBaseClass)
         self.assertEqual(response.headers.get("Access-Control-Max-Age"), "600")
 
 
+@parameterized_class(
+    ("template_path",),
+    [
+        ("/testdata/start_api/cfn-http-api-with-normal-and-default-routes.yaml",),
+        ("/testdata/start_api/nested-templates/cfn-http-api-with-normal-and-default-routes-parent.yaml",),
+    ],
+)
 class TestCFNTemplateHttpApiWithNormalAndDefaultRoutes(StartApiIntegBaseClass):
-    template_path = "/testdata/start_api/cfn-http-api-with-normal-and-default-routes.yaml"
-
     def setUp(self):
         self.url = "http://127.0.0.1:{}".format(self.port)
 
@@ -1611,6 +1670,13 @@ class TestServerlessTemplateWithRestApiAndHttpApiGateways(StartApiIntegBaseClass
         self.assertEqual(response.json(), {"hello": "world"})
 
 
+@parameterized_class(
+    ("template_path",),
+    [
+        ("/testdata/start_api/cfn-http-api-and-rest-api-gateways.yaml",),
+        ("/testdata/start_api/nested-templates/cfn-http-api-and-rest-api-gateways-parent.yaml",),
+    ],
+)
 class TestCFNTemplateWithRestApiAndHttpApiGateways(StartApiIntegBaseClass):
     template_path = "/testdata/start_api/cfn-http-api-and-rest-api-gateways.yaml"
 
@@ -2037,3 +2103,58 @@ COPY main.py ./"""
         response = requests.get(self.url + "/hello", timeout=300)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"hello": "world2"})
+
+
+class TestApiPrecedenceInNestedStacks(StartApiIntegBaseClass):
+    """
+    Here we test when two APIs share the same path+method,
+    whoever located in top level stack should win.
+    See SamApiProvider::merge_routes() docstring for the full detail.
+    """
+
+    template_path = "/testdata/start_api/nested-templates/template-precedence-root.yaml"
+
+    def setUp(self):
+        self.url = "http://127.0.0.1:{}".format(self.port)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_should_call_function_in_root_stack_if_path_method_collide(self):
+        response = requests.post(self.url + "/path1", timeout=300)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"hello": "world"})
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_should_call_function_in_child_stack_if_only_path_collides(self):
+        response = requests.get(self.url + "/path1", timeout=300)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode("utf-8"), "42")
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_should_call_function_in_child_stack_if_nothing_collides(self):
+        data = "I don't collide with any other APIs"
+        response = requests.post(self.url + "/path2", data=data, timeout=300)
+
+        self.assertEqual(response.status_code, 200)
+        response_data = response.json()
+        self.assertEqual(response_data.get("body"), data)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_should_not_call_non_existent_path(self):
+        data = "some data"
+        response = requests.post(self.url + "/path404", data=data, timeout=300)
+
+        self.assertEqual(response.status_code, 403)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_should_not_call_non_mounting_method(self):
+        data = "some data"
+        response = requests.put(self.url + "/path2", data=data, timeout=300)
+
+        self.assertEqual(response.status_code, 403)

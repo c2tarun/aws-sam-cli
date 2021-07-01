@@ -85,7 +85,7 @@ class S3Uploader:
 
         # Check if a file with same data exists
         if not self.force_upload and self.file_exists(remote_path):
-            LOG.debug("File with same data is already exists at %s. " "Skipping upload", remote_path)
+            LOG.info("File with same data already exists at %s, skipping upload", remote_path)
             return self.make_url(remote_path)
 
         try:
@@ -226,7 +226,7 @@ class ProgressPercentage:
     def __init__(self, filename, remote_path):
         self._filename = filename
         self._remote_path = remote_path
-        self._size = float(os.path.getsize(filename))
+        self._size = os.path.getsize(filename)
         self._seen_so_far = 0
         self._lock = threading.Lock()
 

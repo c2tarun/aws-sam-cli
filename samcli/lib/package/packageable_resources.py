@@ -20,7 +20,7 @@ from samcli.lib.package.utils import (
     copy_to_temp_dir,
     upload_local_artifacts,
     upload_local_image_artifacts,
-    is_s3_url,
+    is_s3_protocol_url,
     is_path_value_valid,
 )
 
@@ -40,6 +40,8 @@ from samcli.commands._utils.resources import (
     AWS_SERVERLESS_LAYERVERSION,
     AWS_GLUE_JOB,
     AWS_STEPFUNCTIONS_STATEMACHINE,
+    AWS_CLOUDFORMATION_MODULEVERSION,
+    AWS_CLOUDFORMATION_RESOURCEVERSION,
     METADATA_WITH_LOCAL_PATHS,
     RESOURCES_WITH_LOCAL_PATHS,
     RESOURCES_WITH_IMAGE_COMPONENT,
@@ -423,6 +425,16 @@ class GlueJobCommandScriptLocationResource(ResourceZip):
     PROPERTY_NAME = RESOURCES_WITH_LOCAL_PATHS[AWS_GLUE_JOB][0]
 
 
+class CloudFormationModuleVersionModulePackage(ResourceZip):
+    RESOURCE_TYPE = AWS_CLOUDFORMATION_MODULEVERSION
+    PROPERTY_NAME = RESOURCES_WITH_LOCAL_PATHS[AWS_CLOUDFORMATION_MODULEVERSION][0]
+
+
+class CloudFormationResourceVersionSchemaHandlerPackage(ResourceZip):
+    RESOURCE_TYPE = AWS_CLOUDFORMATION_RESOURCEVERSION
+    PROPERTY_NAME = RESOURCES_WITH_LOCAL_PATHS[AWS_CLOUDFORMATION_RESOURCEVERSION][0]
+
+
 RESOURCES_EXPORT_LIST = [
     ServerlessFunctionResource,
     ServerlessFunctionImageResource,
@@ -442,6 +454,8 @@ RESOURCES_EXPORT_LIST = [
     ServerlessLayerVersionResource,
     LambdaLayerVersionResource,
     GlueJobCommandScriptLocationResource,
+    CloudFormationModuleVersionModulePackage,
+    CloudFormationResourceVersionSchemaHandlerPackage,
 ]
 
 METADATA_EXPORT_LIST = [ServerlessRepoApplicationReadme, ServerlessRepoApplicationLicense]
@@ -452,7 +466,7 @@ def include_transform_export_handler(template_dict, uploader, parent_dir):
         return template_dict
 
     include_location = template_dict.get("Parameters", {}).get("Location", None)
-    if not include_location or not is_path_value_valid(include_location) or is_s3_url(include_location):
+    if not include_location or not is_path_value_valid(include_location) or is_s3_protocol_url(include_location):
         # `include_location` is either empty, or not a string, or an S3 URI
         return template_dict
 

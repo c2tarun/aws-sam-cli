@@ -4,7 +4,7 @@ Holds classes and utility methods related to build graph
 
 import logging
 from pathlib import Path
-from typing import Tuple, List, Any, Optional
+from typing import Tuple, List, Any, Optional, Dict, cast
 from uuid import uuid4
 
 import tomlkit
@@ -24,6 +24,7 @@ RUNTIME_FIELD = "runtime"
 METADATA_FIELD = "metadata"
 FUNCTIONS_FIELD = "functions"
 SOURCE_MD5_FIELD = "source_md5"
+ENV_VARS_FIELD = "env_vars"
 LAYER_NAME_FIELD = "layer_name"
 BUILD_METHOD_FIELD = "build_method"
 COMPATIBLE_RUNTIMES_FIELD = "compatible_runtimes"
@@ -32,7 +33,7 @@ LAYER_FIELD = "layer"
 
 def _function_build_definition_to_toml_table(
     function_build_definition: "FunctionBuildDefinition",
-) -> tomlkit.items.Table:
+) -> tomlkit.api.Table:
     """
     Converts given function_build_definition into toml table representation
 
@@ -43,7 +44,7 @@ def _function_build_definition_to_toml_table(
 
     Returns
     -------
-    tomlkit.items.Table
+    tomlkit.api.Table
         toml table of FunctionBuildDefinition
     """
     toml_table = tomlkit.table()
@@ -52,15 +53,17 @@ def _function_build_definition_to_toml_table(
         toml_table[RUNTIME_FIELD] = function_build_definition.runtime
         toml_table[SOURCE_MD5_FIELD] = function_build_definition.source_md5
     toml_table[PACKAGETYPE_FIELD] = function_build_definition.packagetype
-    toml_table[FUNCTIONS_FIELD] = [f.name for f in function_build_definition.functions]
+    toml_table[FUNCTIONS_FIELD] = [f.full_path for f in function_build_definition.functions]
 
     if function_build_definition.metadata:
         toml_table[METADATA_FIELD] = function_build_definition.metadata
+    if function_build_definition.env_vars:
+        toml_table[ENV_VARS_FIELD] = function_build_definition.env_vars
 
     return toml_table
 
 
-def _toml_table_to_function_build_definition(uuid: str, toml_table: tomlkit.items.Table) -> "FunctionBuildDefinition":
+def _toml_table_to_function_build_definition(uuid: str, toml_table: tomlkit.api.Table) -> "FunctionBuildDefinition":
     """
     Converts given toml table into FunctionBuildDefinition instance
 
@@ -68,7 +71,7 @@ def _toml_table_to_function_build_definition(uuid: str, toml_table: tomlkit.item
     ----------
     uuid: str
         key of the function toml_table instance
-    toml_table: tomlkit.items.Table
+    toml_table: tomlkit.api.Table
         function build definition as toml table
 
     Returns
@@ -82,12 +85,13 @@ def _toml_table_to_function_build_definition(uuid: str, toml_table: tomlkit.item
         toml_table.get(PACKAGETYPE_FIELD, ZIP),
         dict(toml_table.get(METADATA_FIELD, {})),
         toml_table.get(SOURCE_MD5_FIELD, ""),
+        dict(toml_table.get(ENV_VARS_FIELD, {})),
     )
     function_build_definition.uuid = uuid
     return function_build_definition
 
 
-def _layer_build_definition_to_toml_table(layer_build_definition: "LayerBuildDefinition") -> tomlkit.items.Table:
+def _layer_build_definition_to_toml_table(layer_build_definition: "LayerBuildDefinition") -> tomlkit.api.Table:
     """
     Converts given layer_build_definition into toml table representation
 
@@ -98,7 +102,7 @@ def _layer_build_definition_to_toml_table(layer_build_definition: "LayerBuildDef
 
     Returns
     -------
-    tomlkit.items.Table
+    tomlkit.api.Table
         toml table of LayerBuildDefinition
     """
     toml_table = tomlkit.table()
@@ -108,11 +112,14 @@ def _layer_build_definition_to_toml_table(layer_build_definition: "LayerBuildDef
     toml_table[COMPATIBLE_RUNTIMES_FIELD] = layer_build_definition.compatible_runtimes
     toml_table[SOURCE_MD5_FIELD] = layer_build_definition.source_md5
     toml_table[LAYER_FIELD] = layer_build_definition.layer.name
+    if layer_build_definition.env_vars:
+        toml_table[ENV_VARS_FIELD] = layer_build_definition.env_vars
+    toml_table[LAYER_FIELD] = layer_build_definition.layer.full_path
 
     return toml_table
 
 
-def _toml_table_to_layer_build_definition(uuid: str, toml_table: tomlkit.items.Table) -> "LayerBuildDefinition":
+def _toml_table_to_layer_build_definition(uuid: str, toml_table: tomlkit.api.Table) -> "LayerBuildDefinition":
     """
     Converts given toml table into LayerBuildDefinition instance
 
@@ -120,7 +127,7 @@ def _toml_table_to_layer_build_definition(uuid: str, toml_table: tomlkit.items.T
     ----------
     uuid: str
         key of the toml_table instance
-    toml_table:  tomlkit.items.Table
+    toml_table:  tomlkit.api.Table
         layer build definition as toml table
 
     Returns
@@ -129,11 +136,12 @@ def _toml_table_to_layer_build_definition(uuid: str, toml_table: tomlkit.items.T
         LayerBuildDefinition of given toml table
     """
     layer_build_definition = LayerBuildDefinition(
-        toml_table[LAYER_NAME_FIELD],
-        toml_table[CODE_URI_FIELD],
-        toml_table[BUILD_METHOD_FIELD],
-        toml_table[COMPATIBLE_RUNTIMES_FIELD],
+        toml_table.get(LAYER_NAME_FIELD),
+        toml_table.get(CODE_URI_FIELD),
+        toml_table.get(BUILD_METHOD_FIELD),
+        toml_table.get(COMPATIBLE_RUNTIMES_FIELD),
         toml_table.get(SOURCE_MD5_FIELD, ""),
+        dict(toml_table.get(ENV_VARS_FIELD, {})),
     )
     layer_build_definition.uuid = uuid
     return layer_build_definition
@@ -258,7 +266,10 @@ class BuildGraph:
         document = {}
         try:
             txt = self._filepath.read_text()
-            document = tomlkit.loads(txt)
+            # .loads() returns a TOMLDocument,
+            # and it behaves like a standard dictionary according to https://github.com/sdispater/tomlkit.
+            # in tomlkit 0.7.2, the types are broken (tomlkit#128, #130, #134) so here we convert it to Dict.
+            document = cast(Dict, tomlkit.loads(txt))
         except OSError:
             LOG.debug("No previous build graph found, generating new one")
         function_build_definitions_table = document.get(BuildGraph.FUNCTION_BUILD_DEFINITIONS, [])
@@ -296,8 +307,9 @@ class BuildGraph:
         # create toml document and add build definitions
         document = tomlkit.document()
         document.add(tomlkit.comment("This file is auto generated by SAM CLI build command"))
-        document.add(BuildGraph.FUNCTION_BUILD_DEFINITIONS, function_build_definitions_table)
-        document.add(BuildGraph.LAYER_BUILD_DEFINITIONS, layer_build_definitions_table)
+        # we need to cast `Table` to `Item` because of tomlkit#135.
+        document.add(BuildGraph.FUNCTION_BUILD_DEFINITIONS, cast(tomlkit.items.Item, function_build_definitions_table))
+        document.add(BuildGraph.LAYER_BUILD_DEFINITIONS, cast(tomlkit.items.Item, layer_build_definitions_table))
 
         if not self._filepath.exists():
             open(self._filepath, "a+").close()
@@ -322,13 +334,20 @@ class LayerBuildDefinition(AbstractBuildDefinition):
     """
 
     def __init__(
-        self, name: str, codeuri: str, build_method: str, compatible_runtimes: List[str], source_md5: str = ""
+        self,
+        name: str,
+        codeuri: Optional[str],
+        build_method: Optional[str],
+        compatible_runtimes: Optional[List[str]],
+        source_md5: str = "",
+        env_vars: Optional[Dict] = None,
     ):
         super().__init__(source_md5)
         self.name = name
         self.codeuri = codeuri
         self.build_method = build_method
         self.compatible_runtimes = compatible_runtimes
+        self.env_vars = env_vars if env_vars else {}
         # Note(xinhol): In our code, we assume "layer" is never None. We should refactor
         # this and move "layer" out of LayerBuildDefinition to take advantage of type check.
         self.layer: LayerVersion = None  # type: ignore
@@ -336,7 +355,7 @@ class LayerBuildDefinition(AbstractBuildDefinition):
     def __str__(self) -> str:
         return (
             f"LayerBuildDefinition({self.name}, {self.codeuri}, {self.source_md5}, {self.uuid}, "
-            f"{self.build_method}, {self.compatible_runtimes}, {self.layer.name})"
+            f"{self.build_method}, {self.compatible_runtimes}, {self.env_vars})"
         )
 
     def __eq__(self, other: Any) -> bool:
@@ -361,6 +380,7 @@ class LayerBuildDefinition(AbstractBuildDefinition):
             and self.codeuri == other.codeuri
             and self.build_method == other.build_method
             and self.compatible_runtimes == other.compatible_runtimes
+            and self.env_vars == other.env_vars
         )
 
 
@@ -370,13 +390,20 @@ class FunctionBuildDefinition(AbstractBuildDefinition):
     """
 
     def __init__(
-        self, runtime: str, codeuri: str, packagetype: str, metadata: Optional[dict], source_md5: str = ""
+        self,
+        runtime: Optional[str],
+        codeuri: Optional[str],
+        packagetype: str,
+        metadata: Optional[Dict],
+        source_md5: str = "",
+        env_vars: Optional[Dict] = None,
     ) -> None:
         super().__init__(source_md5)
         self.runtime = runtime
         self.codeuri = codeuri
         self.packagetype = packagetype
         self.metadata = metadata if metadata else {}
+        self.env_vars = env_vars if env_vars else {}
         self.functions: List[Function] = []
 
     def add_function(self, function: Function) -> None:
@@ -390,6 +417,20 @@ class FunctionBuildDefinition(AbstractBuildDefinition):
         self._validate_functions()
         return self.functions[0].handler
 
+    def get_full_path(self) -> str:
+        """
+        Return the build identifier of the first function
+        """
+        self._validate_functions()
+        return self.functions[0].full_path
+
+    def get_build_dir(self, artifact_root_dir: str) -> str:
+        """
+        Return the directory path relative to root build directory
+        """
+        self._validate_functions()
+        return self.functions[0].get_build_dir(artifact_root_dir)
+
     def _validate_functions(self) -> None:
         if not self.functions:
             raise InvalidBuildGraphException("Build definition doesn't have any function definition to build")
@@ -397,7 +438,8 @@ class FunctionBuildDefinition(AbstractBuildDefinition):
     def __str__(self) -> str:
         return (
             "BuildDefinition("
-            f"{self.runtime}, {self.codeuri}, {self.packagetype}, {self.source_md5}, {self.uuid}, {self.metadata}, "
+            f"{self.runtime}, {self.codeuri}, {self.packagetype}, {self.source_md5}, "
+            f"{self.uuid}, {self.metadata}, {self.env_vars}, "
             f"{[f.functionname for f in self.functions]})"
         )
 
@@ -427,4 +469,5 @@ class FunctionBuildDefinition(AbstractBuildDefinition):
             and self.codeuri == other.codeuri
             and self.packagetype == other.packagetype
             and self.metadata == other.metadata
+            and self.env_vars == other.env_vars
         )

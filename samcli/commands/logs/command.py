@@ -5,7 +5,7 @@ CLI command for "logs" command
 import logging
 import click
 
-from samcli.cli.main import pass_context, common_options as cli_framework_options, aws_creds_options
+from samcli.cli.main import pass_context, common_options as cli_framework_options, aws_creds_options, print_cmdline_args
 from samcli.lib.telemetry.metric import track_command
 from samcli.cli.cli_config_file import configuration_option, TomlProvider
 from samcli.lib.utils.version_checker import check_newer_version
@@ -77,6 +77,7 @@ $ sam logs -n HelloWorldFunction --stack-name mystack --filter "error" \n
 @pass_context
 @track_command
 @check_newer_version
+@print_cmdline_args
 def cli(
     ctx,
     name,
@@ -88,6 +89,9 @@ def cli(
     config_file,
     config_env,
 ):  # pylint: disable=redefined-builtin
+    """
+    `sam logs` command entry point
+    """
     # All logic must be implemented in the ``do_cli`` method. This helps with easy unit testing
 
     do_cli(name, stack_name, filter, tail, start_time, end_time)  # pragma: no cover
@@ -107,24 +111,13 @@ def do_cli(function_name, stack_name, filter_pattern, tailing, start_time, end_t
         filter_pattern=filter_pattern,
         start_time=start_time,
         end_time=end_time,
-        # output_file is not yet supported by CLI
-        output_file=None,
     ) as context:
 
         if tailing:
-            events_iterable = context.fetcher.tail(
-                context.log_group_name, filter_pattern=context.filter_pattern, start=context.start_time
-            )
+            context.fetcher.tail(start_time=context.start_time, filter_pattern=context.filter_pattern)
         else:
-            events_iterable = context.fetcher.fetch(
-                context.log_group_name,
+            context.fetcher.load_time_period(
+                start_time=context.start_time,
+                end_time=context.end_time,
                 filter_pattern=context.filter_pattern,
-                start=context.start_time,
-                end=context.end_time,
             )
-
-        formatted_events = context.formatter.do_format(events_iterable)
-
-        for event in formatted_events:
-            # New line is not necessary. It is already in the log events sent by CloudWatch
-            click.echo(event, nl=False)

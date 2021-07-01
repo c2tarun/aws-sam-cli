@@ -24,7 +24,7 @@ from samcli.lib.package.artifact_exporter import (
     ServerlessApplicationResource,
 )
 from samcli.lib.package.packageable_resources import (
-    is_s3_url,
+    is_s3_protocol_url,
     is_local_file,
     upload_local_artifacts,
     Resource,
@@ -47,6 +47,8 @@ from samcli.lib.package.packageable_resources import (
     AppSyncFunctionConfigurationRequestTemplateResource,
     AppSyncFunctionConfigurationResponseTemplateResource,
     GlueJobCommandScriptLocationResource,
+    CloudFormationModuleVersionModulePackage,
+    CloudFormationResourceVersionSchemaHandlerPackage,
     ResourceZip,
     ResourceImage,
 )
@@ -93,6 +95,8 @@ class TestArtifactExporter(unittest.TestCase):
             {"class": ServerlessRepoApplicationLicense, "expected_result": uploaded_s3_url},
             {"class": ServerlessRepoApplicationLicense, "expected_result": uploaded_s3_url},
             {"class": GlueJobCommandScriptLocationResource, "expected_result": {"ScriptLocation": uploaded_s3_url}},
+            {"class": CloudFormationModuleVersionModulePackage, "expected_result": uploaded_s3_url},
+            {"class": CloudFormationResourceVersionSchemaHandlerPackage, "expected_result": uploaded_s3_url},
         ]
 
         with patch("samcli.lib.package.packageable_resources.upload_local_artifacts") as upload_local_artifacts_mock:
@@ -194,10 +198,10 @@ class TestArtifactExporter(unittest.TestCase):
             self._assert_is_invalid_s3_url(url)
 
     def _assert_is_valid_s3_url(self, url):
-        self.assertTrue(is_s3_url(url), "{0} should be valid".format(url))
+        self.assertTrue(is_s3_protocol_url(url), "{0} should be valid".format(url))
 
     def _assert_is_invalid_s3_url(self, url):
-        self.assertFalse(is_s3_url(url), "{0} should be valid".format(url))
+        self.assertFalse(is_s3_protocol_url(url), "{0} should be valid".format(url))
 
     def test_parse_s3_url(self):
 

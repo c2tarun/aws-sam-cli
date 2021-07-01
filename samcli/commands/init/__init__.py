@@ -9,7 +9,7 @@ from json import JSONDecodeError
 import click
 
 from samcli.cli.cli_config_file import configuration_option, TomlProvider
-from samcli.cli.main import pass_context, common_options
+from samcli.cli.main import pass_context, common_options, print_cmdline_args
 from samcli.lib.utils.version_checker import check_newer_version
 from samcli.local.common.runtime_template import RUNTIMES, SUPPORTED_DEP_MANAGERS, LAMBDA_IMAGES_RUNTIMES
 from samcli.lib.telemetry.metric import track_command
@@ -163,7 +163,7 @@ def non_interactive_validation(func):
     default=None,
     help="Lambda Image of your app",
     cls=Mutex,
-    not_required=["location", "app_template", "runtime"],
+    not_required=["location", "runtime"],
 )
 @click.option(
     "-d",
@@ -182,7 +182,7 @@ def non_interactive_validation(func):
     help="Identifier of the managed application template you want to use. "
     "If not sure, call 'sam init' without options for an interactive workflow.",
     cls=Mutex,
-    not_required=["location", "base_image"],
+    not_required=["location"],
 )
 @click.option(
     "--no-input",
@@ -204,6 +204,7 @@ def non_interactive_validation(func):
 @pass_context
 @track_command
 @check_newer_version
+@print_cmdline_args
 def cli(
     ctx,
     no_interactive,
@@ -220,6 +221,9 @@ def cli(
     config_file,
     config_env,
 ):
+    """
+    `sam init` command entry point
+    """
     do_cli(
         ctx,
         no_interactive,
@@ -252,8 +256,10 @@ def do_cli(
     app_template,
     no_input,
     extra_context,
-    auto_clone=True,
 ):
+    """
+    Implementation of the ``cli`` method
+    """
 
     from samcli.commands.init.init_generator import do_generate
     from samcli.commands.init.interactive_init_flow import do_interactive
@@ -267,17 +273,18 @@ def do_cli(
     image_bool = name and pt_explicit and base_image
     if location or zip_bool or image_bool:
         # need to turn app_template into a location before we generate
-        templates = InitTemplates(no_interactive, auto_clone)
+        templates = InitTemplates(no_interactive)
         if package_type == IMAGE and image_bool:
             base_image, runtime = _get_runtime_from_image(base_image)
             options = templates.init_options(package_type, runtime, base_image, dependency_manager)
-            if len(options) == 1:
-                app_template = options[0].get("appTemplate")
-            elif len(options) > 1:
-                raise LambdaImagesTemplateException(
-                    "Multiple lambda image application templates found. "
-                    "This should not be possible, please raise an issue."
-                )
+            if not app_template:
+                if len(options) == 1:
+                    app_template = options[0].get("appTemplate")
+                elif len(options) > 1:
+                    raise LambdaImagesTemplateException(
+                        "Multiple lambda image application templates found. "
+                        "Please specify one using the --app-template parameter."
+                    )
 
         if app_template and not location:
             location = templates.location_from_app_template(

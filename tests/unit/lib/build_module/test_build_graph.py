@@ -15,6 +15,7 @@ from samcli.lib.build.build_graph import (
     METADATA_FIELD,
     FUNCTIONS_FIELD,
     SOURCE_MD5_FIELD,
+    ENV_VARS_FIELD,
     LAYER_NAME_FIELD,
     BUILD_METHOD_FIELD,
     COMPATIBLE_RUNTIMES_FIELD,
@@ -25,7 +26,7 @@ from samcli.lib.build.build_graph import (
     InvalidBuildGraphException,
     LayerBuildDefinition,
 )
-from samcli.lib.providers.provider import Function
+from samcli.lib.providers.provider import Function, LayerVersion
 from samcli.lib.utils import osutils
 from samcli.lib.utils.packagetype import ZIP
 
@@ -46,9 +47,13 @@ def generate_function(
     layers="layers",
     events="events",
     codesign_config_arn="codesign_config_arn",
-    metadata={},
+    metadata=None,
     inlinecode=None,
+    stack_path="",
 ):
+    if metadata is None:
+        metadata = {}
+
     return Function(
         name,
         function_name,
@@ -67,12 +72,30 @@ def generate_function(
         metadata,
         inlinecode,
         codesign_config_arn,
+        stack_path,
     )
+
+
+def generate_layer(
+    arn="arn:aws:lambda:region:account-id:layer:layer-name:1",
+    codeuri="codeuri",
+    compatible_runtimes=None,
+    metadata=None,
+    stack_path="",
+):
+    if compatible_runtimes is None:
+        compatible_runtimes = ["runtime"]
+    if metadata is None:
+        metadata = {}
+
+    return LayerVersion(arn, codeuri, compatible_runtimes, metadata, stack_path)
 
 
 class TestConversionFunctions(TestCase):
     def test_function_build_definition_to_toml_table(self):
-        build_definition = FunctionBuildDefinition("runtime", "codeuri", ZIP, {"key": "value"}, "source_md5")
+        build_definition = FunctionBuildDefinition(
+            "runtime", "codeuri", ZIP, {"key": "value"}, "source_md5", env_vars={"env_vars": "value1"}
+        )
         build_definition.add_function(generate_function())
 
         toml_table = _function_build_definition_to_toml_table(build_definition)
@@ -83,9 +106,10 @@ class TestConversionFunctions(TestCase):
         self.assertEqual(toml_table[METADATA_FIELD], build_definition.metadata)
         self.assertEqual(toml_table[FUNCTIONS_FIELD], [f.name for f in build_definition.functions])
         self.assertEqual(toml_table[SOURCE_MD5_FIELD], build_definition.source_md5)
+        self.assertEqual(toml_table[ENV_VARS_FIELD], build_definition.env_vars)
 
     def test_layer_build_definition_to_toml_table(self):
-        build_definition = LayerBuildDefinition("name", "codeuri", "method", "runtime")
+        build_definition = LayerBuildDefinition("name", "codeuri", "method", "runtime", env_vars={"env_vars": "value"})
         build_definition.layer = generate_function()
 
         toml_table = _layer_build_definition_to_toml_table(build_definition)
@@ -96,6 +120,7 @@ class TestConversionFunctions(TestCase):
         self.assertEqual(toml_table[COMPATIBLE_RUNTIMES_FIELD], build_definition.compatible_runtimes)
         self.assertEqual(toml_table[LAYER_FIELD], build_definition.layer.name)
         self.assertEqual(toml_table[SOURCE_MD5_FIELD], build_definition.source_md5)
+        self.assertEqual(toml_table[ENV_VARS_FIELD], build_definition.env_vars)
 
     def test_toml_table_to_function_build_definition(self):
         toml_table = tomlkit.table()
@@ -105,6 +130,7 @@ class TestConversionFunctions(TestCase):
         toml_table[METADATA_FIELD] = {"key": "value"}
         toml_table[FUNCTIONS_FIELD] = ["function1"]
         toml_table[SOURCE_MD5_FIELD] = "source_md5"
+        toml_table[ENV_VARS_FIELD] = {"env_vars": "value"}
         uuid = str(uuid4())
 
         build_definition = _toml_table_to_function_build_definition(uuid, toml_table)
@@ -116,6 +142,7 @@ class TestConversionFunctions(TestCase):
         self.assertEqual(build_definition.uuid, uuid)
         self.assertEqual(build_definition.functions, [])
         self.assertEqual(build_definition.source_md5, toml_table[SOURCE_MD5_FIELD])
+        self.assertEqual(build_definition.env_vars, toml_table[ENV_VARS_FIELD])
 
     def test_toml_table_to_layer_build_definition(self):
         toml_table = tomlkit.table()
@@ -125,6 +152,7 @@ class TestConversionFunctions(TestCase):
         toml_table[COMPATIBLE_RUNTIMES_FIELD] = "runtime"
         toml_table[COMPATIBLE_RUNTIMES_FIELD] = "layer1"
         toml_table[SOURCE_MD5_FIELD] = "source_md5"
+        toml_table[ENV_VARS_FIELD] = {"env_vars": "value"}
         uuid = str(uuid4())
 
         build_definition = _toml_table_to_layer_build_definition(uuid, toml_table)
@@ -136,16 +164,21 @@ class TestConversionFunctions(TestCase):
         self.assertEqual(build_definition.compatible_runtimes, toml_table[COMPATIBLE_RUNTIMES_FIELD])
         self.assertEqual(build_definition.layer, None)
         self.assertEqual(build_definition.source_md5, toml_table[SOURCE_MD5_FIELD])
+        self.assertEqual(build_definition.env_vars, toml_table[ENV_VARS_FIELD])
 
 
 class TestBuildGraph(TestCase):
     CODEURI = "hello_world_python/"
+    LAYER_CODEURI = "sum_layer/"
+    LAYER_NAME = "SumLayer"
     ZIP = ZIP
     RUNTIME = "python3.8"
+    LAYER_RUNTIME = "nodejs12.x"
     METADATA = {"Test": "hello", "Test2": "world"}
     UUID = "3c1c254e-cd4b-4d94-8c74-7ab870b36063"
     LAYER_UUID = "7dnc257e-cd4b-4d94-8c74-7ab870b3abc3"
     SOURCE_MD5 = "cae49aa393d669e850bd49869905099d"
+    ENV_VARS = {"env_vars": "value"}
 
     BUILD_GRAPH_CONTENTS = f"""
     [function_build_definitions]
@@ -158,15 +191,19 @@ class TestBuildGraph(TestCase):
     [function_build_definitions.{UUID}.metadata]
     Test = "{METADATA['Test']}"
     Test2 = "{METADATA['Test2']}"
+    [function_build_definitions.{UUID}.env_vars]
+    env_vars = "{ENV_VARS['env_vars']}"
 
     [layer_build_definitions]
     [layer_build_definitions.{LAYER_UUID}]
-    layer_name = "SumLayer"
-    codeuri = "sum_layer/"
-    build_method = "nodejs12.x"
-    compatible_runtimes = ["nodejs12.x"]
+    layer_name = "{LAYER_NAME}"
+    codeuri = "{LAYER_CODEURI}"
+    build_method = "{LAYER_RUNTIME}"
+    compatible_runtimes = ["{LAYER_RUNTIME}"]
     source_md5 = "{SOURCE_MD5}"
     layer = "SumLayer"
+    [layer_build_definitions.{LAYER_UUID}.env_vars]
+    env_vars = "{ENV_VARS['env_vars']}"
     """
 
     def test_should_instantiate_first_time(self):
@@ -181,6 +218,7 @@ class TestBuildGraph(TestCase):
             self.assertEqual(
                 build_graph1.get_function_build_definitions(), build_graph2.get_function_build_definitions()
             )
+            self.assertEqual(build_graph1.get_layer_build_definitions(), build_graph2.get_layer_build_definitions())
 
     def test_should_instantiate_first_time_and_update(self):
         with osutils.mkdir_temp() as temp_base_dir:
@@ -189,17 +227,33 @@ class TestBuildGraph(TestCase):
 
             # create a build graph and persist it
             build_graph1 = BuildGraph(str(build_dir))
-            build_definition1 = FunctionBuildDefinition(
+            function_build_definition1 = FunctionBuildDefinition(
                 TestBuildGraph.RUNTIME,
                 TestBuildGraph.CODEURI,
                 TestBuildGraph.ZIP,
                 TestBuildGraph.METADATA,
                 TestBuildGraph.SOURCE_MD5,
+                TestBuildGraph.ENV_VARS,
             )
             function1 = generate_function(
                 runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, metadata=TestBuildGraph.METADATA
             )
-            build_graph1.put_function_build_definition(build_definition1, function1)
+            build_graph1.put_function_build_definition(function_build_definition1, function1)
+            layer_build_definition1 = LayerBuildDefinition(
+                TestBuildGraph.LAYER_NAME,
+                TestBuildGraph.LAYER_CODEURI,
+                TestBuildGraph.LAYER_RUNTIME,
+                [TestBuildGraph.LAYER_RUNTIME],
+                TestBuildGraph.SOURCE_MD5,
+                TestBuildGraph.ENV_VARS,
+            )
+            layer1 = generate_layer(
+                compatible_runtimes=[TestBuildGraph.RUNTIME],
+                codeuri=TestBuildGraph.LAYER_CODEURI,
+                metadata=TestBuildGraph.METADATA,
+            )
+            build_graph1.put_layer_build_definition(layer_build_definition1, layer1)
+
             build_graph1.clean_redundant_definitions_and_update(True)
 
             # read previously persisted graph and compare
@@ -208,8 +262,15 @@ class TestBuildGraph(TestCase):
                 len(build_graph1.get_function_build_definitions()), len(build_graph2.get_function_build_definitions())
             )
             self.assertEqual(
+                len(build_graph1.get_layer_build_definitions()), len(build_graph2.get_layer_build_definitions())
+            )
+            self.assertEqual(
                 list(build_graph1.get_function_build_definitions())[0],
                 list(build_graph2.get_function_build_definitions())[0],
+            )
+            self.assertEqual(
+                list(build_graph1.get_layer_build_definitions())[0],
+                list(build_graph2.get_layer_build_definitions())[0],
             )
 
     def test_should_read_existing_build_graph(self):
@@ -221,12 +282,20 @@ class TestBuildGraph(TestCase):
             build_graph_path.write_text(TestBuildGraph.BUILD_GRAPH_CONTENTS)
 
             build_graph = BuildGraph(str(build_dir))
-            for build_definition in build_graph.get_function_build_definitions():
-                self.assertEqual(build_definition.codeuri, TestBuildGraph.CODEURI)
-                self.assertEqual(build_definition.runtime, TestBuildGraph.RUNTIME)
-                self.assertEqual(build_definition.packagetype, TestBuildGraph.ZIP)
-                self.assertEqual(build_definition.metadata, TestBuildGraph.METADATA)
-                self.assertEqual(build_definition.source_md5, TestBuildGraph.SOURCE_MD5)
+            for function_build_definition in build_graph.get_function_build_definitions():
+                self.assertEqual(function_build_definition.codeuri, TestBuildGraph.CODEURI)
+                self.assertEqual(function_build_definition.runtime, TestBuildGraph.RUNTIME)
+                self.assertEqual(function_build_definition.packagetype, TestBuildGraph.ZIP)
+                self.assertEqual(function_build_definition.metadata, TestBuildGraph.METADATA)
+                self.assertEqual(function_build_definition.source_md5, TestBuildGraph.SOURCE_MD5)
+                self.assertEqual(function_build_definition.env_vars, TestBuildGraph.ENV_VARS)
+
+            for layer_build_definition in build_graph.get_layer_build_definitions():
+                self.assertEqual(layer_build_definition.name, TestBuildGraph.LAYER_NAME)
+                self.assertEqual(layer_build_definition.codeuri, TestBuildGraph.LAYER_CODEURI)
+                self.assertEqual(layer_build_definition.build_method, TestBuildGraph.LAYER_RUNTIME)
+                self.assertEqual(layer_build_definition.compatible_runtimes, [TestBuildGraph.LAYER_RUNTIME])
+                self.assertEqual(layer_build_definition.env_vars, TestBuildGraph.ENV_VARS)
 
     def test_functions_should_be_added_existing_build_graph(self):
         with osutils.mkdir_temp() as temp_base_dir:
@@ -244,36 +313,97 @@ class TestBuildGraph(TestCase):
                 TestBuildGraph.ZIP,
                 TestBuildGraph.METADATA,
                 TestBuildGraph.SOURCE_MD5,
+                TestBuildGraph.ENV_VARS,
             )
             function1 = generate_function(
-                runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, metadata=TestBuildGraph.METADATA
+                runtime=TestBuildGraph.RUNTIME,
+                codeuri=TestBuildGraph.CODEURI,
+                metadata=TestBuildGraph.METADATA,
             )
             build_graph.put_function_build_definition(build_definition1, function1)
 
-            self.assertTrue(len(build_graph.get_function_build_definitions()), 1)
-            for build_definition in build_graph.get_function_build_definitions():
-                self.assertTrue(len(build_definition.functions), 1)
-                self.assertTrue(build_definition.functions[0], function1)
-                self.assertEqual(build_definition.uuid, TestBuildGraph.UUID)
+            build_definitions = build_graph.get_function_build_definitions()
+            self.assertEqual(len(build_definitions), 1)
+            self.assertEqual(len(build_definitions[0].functions), 1)
+            self.assertEqual(build_definitions[0].functions[0], function1)
+            self.assertEqual(build_definitions[0].uuid, TestBuildGraph.UUID)
 
             build_definition2 = FunctionBuildDefinition(
-                "another_runtime", "another_codeuri", TestBuildGraph.ZIP, None, "another_source_md5"
+                "another_runtime",
+                "another_codeuri",
+                TestBuildGraph.ZIP,
+                None,
+                "another_source_md5",
+                {"env_vars": "value2"},
             )
             function2 = generate_function(name="another_function")
             build_graph.put_function_build_definition(build_definition2, function2)
-            self.assertTrue(len(build_graph.get_function_build_definitions()), 2)
+
+            build_definitions = build_graph.get_function_build_definitions()
+            self.assertEqual(len(build_definitions), 2)
+            self.assertEqual(len(build_definitions[1].functions), 1)
+            self.assertEqual(build_definitions[1].functions[0], function2)
+
+    def test_layers_should_be_added_existing_build_graph(self):
+        with osutils.mkdir_temp() as temp_base_dir:
+            build_dir = Path(temp_base_dir, ".aws-sam", "build")
+            build_dir.mkdir(parents=True)
+
+            build_graph_path = Path(build_dir.parent, "build.toml")
+            build_graph_path.write_text(TestBuildGraph.BUILD_GRAPH_CONTENTS)
+
+            build_graph = BuildGraph(str(build_dir))
+
+            build_definition1 = LayerBuildDefinition(
+                TestBuildGraph.LAYER_NAME,
+                TestBuildGraph.LAYER_CODEURI,
+                TestBuildGraph.LAYER_RUNTIME,
+                [TestBuildGraph.LAYER_RUNTIME],
+                TestBuildGraph.SOURCE_MD5,
+                TestBuildGraph.ENV_VARS,
+            )
+            layer1 = generate_layer(
+                compatible_runtimes=[TestBuildGraph.RUNTIME],
+                codeuri=TestBuildGraph.LAYER_CODEURI,
+                metadata=TestBuildGraph.METADATA,
+            )
+            build_graph.put_layer_build_definition(build_definition1, layer1)
+
+            build_definitions = build_graph.get_layer_build_definitions()
+            self.assertEqual(len(build_definitions), 1)
+            self.assertEqual(build_definitions[0].layer, layer1)
+            self.assertEqual(build_definitions[0].uuid, TestBuildGraph.LAYER_UUID)
+
+            build_definition2 = LayerBuildDefinition(
+                "another_layername",
+                "another_codeuri",
+                "another_runtime",
+                ["another_runtime"],
+                "another_source_md5",
+                {"env_vars": "value2"},
+            )
+            layer2 = generate_layer(arn="arn:aws:lambda:region:account-id:layer:another-layer-name:1")
+            build_graph.put_layer_build_definition(build_definition2, layer2)
+
+            build_definitions = build_graph.get_layer_build_definitions()
+            self.assertEqual(len(build_definitions), 2)
+            self.assertEqual(build_definitions[1].layer, layer2)
 
 
 class TestBuildDefinition(TestCase):
     def test_single_function_should_return_function_and_handler_name(self):
-        build_definition = FunctionBuildDefinition("runtime", "codeuri", ZIP, "metadata", "source_md5")
+        build_definition = FunctionBuildDefinition(
+            "runtime", "codeuri", ZIP, "metadata", "source_md5", {"env_vars": "value"}
+        )
         build_definition.add_function(generate_function())
 
         self.assertEqual(build_definition.get_handler_name(), "handler")
         self.assertEqual(build_definition.get_function_name(), "name")
 
     def test_no_function_should_raise_exception(self):
-        build_definition = FunctionBuildDefinition("runtime", "codeuri", ZIP, "metadata", "source_md5")
+        build_definition = FunctionBuildDefinition(
+            "runtime", "codeuri", ZIP, "metadata", "source_md5", {"env_vars": "value"}
+        )
 
         self.assertRaises(InvalidBuildGraphException, build_definition.get_handler_name)
         self.assertRaises(InvalidBuildGraphException, build_definition.get_function_name)
@@ -281,6 +411,16 @@ class TestBuildDefinition(TestCase):
     def test_same_runtime_codeuri_metadata_should_reflect_as_same_object(self):
         build_definition1 = FunctionBuildDefinition("runtime", "codeuri", ZIP, {"key": "value"}, "source_md5")
         build_definition2 = FunctionBuildDefinition("runtime", "codeuri", ZIP, {"key": "value"}, "source_md5")
+
+        self.assertEqual(build_definition1, build_definition2)
+
+    def test_same_env_vars_reflect_as_same_object(self):
+        build_definition1 = FunctionBuildDefinition(
+            "runtime", "codeuri", ZIP, {"key": "value"}, "source_md5", {"env_vars": "value"}
+        )
+        build_definition2 = FunctionBuildDefinition(
+            "runtime", "codeuri", ZIP, {"key": "value"}, "source_md5", {"env_vars": "value"}
+        )
 
         self.assertEqual(build_definition1, build_definition2)
 
@@ -337,6 +477,16 @@ class TestBuildDefinition(TestCase):
 
         self.assertNotEqual(build_definition1, build_definition2)
 
+    def test_different_env_vars_should_not_reflect_as_same_object(self):
+        build_definition1 = FunctionBuildDefinition(
+            "runtime", "codeuri", ZIP, {"key": "value"}, "source_md5", {"env_vars": "value1"}
+        )
+        build_definition2 = FunctionBuildDefinition(
+            "runtime", "codeuri", ZIP, {"key": "value"}, "source_md5", {"env_vars": "value2"}
+        )
+
+        self.assertNotEqual(build_definition1, build_definition2)
+
     def test_euqality_with_another_object(self):
         build_definition = FunctionBuildDefinition("runtime", "codeuri", ZIP, None, "source_md5")
         self.assertNotEqual(build_definition, {})
@@ -345,5 +495,5 @@ class TestBuildDefinition(TestCase):
         build_definition = FunctionBuildDefinition("runtime", "codeuri", ZIP, None, "source_md5")
         self.assertEqual(
             str(build_definition),
-            f"BuildDefinition(runtime, codeuri, Zip, source_md5, {build_definition.uuid}, {{}}, [])",
+            f"BuildDefinition(runtime, codeuri, Zip, source_md5, {build_definition.uuid}, {{}}, {{}}, [])",
         )
