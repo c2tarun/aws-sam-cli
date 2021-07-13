@@ -209,7 +209,7 @@ class InteractiveInitFlow:
 
 
 def _load_pipeline_bootstrap_resources() -> Tuple[List[str], Dict[str, str]]:
-    bootstrap_command_names = ["pipeline", "bootstrap"]
+    pipeline_init_command_names = ["pipeline_init"]
     section = "parameters"
     context: Dict = {}
 
@@ -223,7 +223,7 @@ def _load_pipeline_bootstrap_resources() -> Tuple[List[str], Dict[str, str]]:
     # we don't want to include "default" here.
     env_names = [env_name for env_name in config.get_env_names() if env_name != "default"]
     for env in env_names:
-        for key, value in config.get_all(bootstrap_command_names, section, env).items():
+        for key, value in config.get_all(pipeline_init_command_names, section, env).items():
             context[str([env, key])] = value
 
     # pre-load the list of env names detected from pipelineconfig.toml
